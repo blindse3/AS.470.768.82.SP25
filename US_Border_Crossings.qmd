@@ -1,0 +1,261 @@
+---
+title: "Investigating Changes in US Land-based Border Crossings 1996-Present"
+---
+
+<div style="text-align: justify;">
+
+This report visualizes and summarizes monthly and yearly border crossing numbers across the US-Canada and US-Mexico borders in order to understand trends in personal US land-based border crossings. These data come from the Bureau of Transportation Statistics (BTS) and provide summary statistics for inbound crossings at the US-Canad and US-Mexico border since 1996. 
+
+Border crossings data are collected at ports of entry by US Customs and Border Protection (CBP) and reflect the number of vehicles, containers, passengers, pr pedestrians entering the United States. The data can be found here:
+
+U.S. Bureau of Transportation Statistics. (2024). Border crossing entry data. Data.gov. [Border Crossing Entry Data – data.gov](https://catalog.data.gov/dataset/border-crossing-entry-data-683ae)
+
+Each row of the data set represents the amount of crossings via a type of transportation at a specific port of entry over the course of a month. There are 400,148 observations across 10 variables. For this analysis, the variables used include:
+
+- **Border**: US–Canada vs. US–Mexico  
+- **Date**: Month and year of observation  
+- **Measure**: Mode of transportation (e.g., car, bus, pedestrian)  
+- **Value**: Number of crossings
+
+To understand the overall trend of US-Canada vs US-Mexico crossings due to personal travel (i.e. not including freight and commercial traffic) data were transformed by:
+
+1. Splitting the data set into US-Canada vs US-Mexico border crossings
+2. Restricting 'Measure' to pedestrians, personal vehicle passengers, bus passengers, and train passengers only
+3. Summing border crossings (Value) from these measures across date (i.e. computing the sum of all personal travel modes for a Month/Year)
+4. Computing a monthly average of border crossings across each year
+5. Summing total border crossings across 4 year periods (starting in 1996) as well as mean, max, and min annual border crossings across those periods
+
+</div>
+
+```{r}
+#| label: Load libraries
+#| echo: false
+#| results: "hide"
+#| message: false
+#| warning: false
+#| include: false
+# Load required packages
+library(dplyr)
+library(ggplot2)
+library(knitr)
+library(httr)
+
+```
+
+
+```{r}
+#| label: Load data
+#| echo: false
+#| results: "hide"
+#| message: false
+#| warning: false
+#| include: false
+# load data
+# Define the URL and local file path
+url <- "https://github.com/blindse3/AS.470.768.82.SP25/blob/main/Border_Crossing_Entry_Data.zip?raw=true"
+zip_file <- "Border_Crossing_Entry_Data.zip"
+
+# Download the ZIP file
+GET(url, write_disk(zip_file, overwrite = TRUE))
+
+# Unzip contents
+unzip(zip_file, exdir = "border_data")
+
+# List files
+files <- list.files("border_data", full.names = TRUE)
+
+# Read the first CSV file (modify if needed)
+data <- read.csv(files[1])
+```
+
+```{r}
+#| label: define-border-function
+#| echo: false
+#| include: false
+
+analyze_border_crossings <- function(data, border_name, border_label) {
+
+  # Process data
+  border_data <- data %>%
+    filter(Border == border_name) %>%
+    mutate(Date = as.Date(paste0("01 ", Date), format = "%d %b %Y")) %>%
+    filter(Measure %in% c("Pedestrians", 
+                          "Personal Vehicle Passengers", 
+                          "Bus Passengers", 
+                          "Train Passengers")) %>%
+    group_by(Date) %>%
+    summarise(Value = sum(Value, na.rm = TRUE), .groups = "drop") %>%
+    mutate(Value = Value / 1e6)
+
+  # Generate breaks for x-axis
+  breaks <- seq(as.Date("1996-01-01"), as.Date("2025-01-01"), by = "4 years")
+
+  # Plot 1: Monthly time series
+  print(
+    ggplot(border_data, aes(x = Date, y = Value)) +
+      geom_line() +
+      labs(title = paste("Monthly Border Crossings by Personal Transportation (", border_label, ")"),
+           x = "", y = "Number of Crossings (Millions)") +
+      scale_x_date(breaks = breaks, date_labels = "%Y") +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  )
+
+  # Compute average monthly value per year
+  avg_data <- border_data %>%
+    mutate(Year = as.integer(format(Date, "%Y"))) %>%
+    group_by(Year) %>%
+    summarise(Avg_Value = mean(Value, na.rm = TRUE), .groups = "drop") %>%
+    mutate(Year = as.Date(paste0(Year, "-01-01")))
+
+  # Plot 3: Combined plot
+  print(
+    ggplot() +
+      geom_line(data = border_data, aes(x = Date, y = Value), color = "steelblue") +
+      geom_line(data = avg_data, aes(x = Year, y = Avg_Value), color = "darkred", linewidth = 1) +
+      geom_point(data = avg_data, aes(x = Year, y = Avg_Value), color = "darkred", size = 2) +
+      labs(title = paste("Monthly and Average Monthly Border Crossings Across Year by Personal Transportation (", border_label, ")"),
+           x = "", y = "Number of Crossings (Millions)") +
+      scale_x_date(breaks = breaks, date_labels = "%Y") +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  )
+
+  # Build 4-year summary table
+  summary_table <- border_data %>%
+    mutate(Year = as.integer(format(Date, "%Y"))) %>%
+    group_by(Year) %>%
+    summarise(Annual_Total = sum(Value, na.rm = TRUE), .groups = "drop") %>%
+    mutate(Period_Start = floor((Year - 1996) / 4) * 4 + 1996,
+           Period_End = Period_Start + 3,
+           Period = paste0(Period_Start, "-", Period_End)) %>%
+    group_by(Period, Period_Start) %>%
+    summarise(
+      Total_Crossings = sum(Annual_Total, na.rm = TRUE),
+      Mean_Annual = mean(Annual_Total, na.rm = TRUE),
+      Max_Annual = max(Annual_Total, na.rm = TRUE),
+      Min_Annual = min(Annual_Total, na.rm = TRUE),
+      Year_Count = n(),
+      .groups = "drop"
+    ) %>%
+    filter(Year_Count == 4) %>%
+    select(Period, Total_Crossings, Mean_Annual, Max_Annual, Min_Annual)
+
+  # Format table for printing
+  kable_table <- summary_table %>%
+    mutate(across(where(is.numeric), ~ round(.x, 2))) %>%
+    kable(
+      caption = paste(border_label, "Border Crossings by Personal Transporttion by 4-Year Period"),
+      col.names = c("Period", "Total (M)", "Mean Annual (M)", "Max Annual (M)", "Min Annual (M)"),
+      align = "c"
+    )
+
+  print(kable_table)
+
+  # Return all key objects
+  return(invisible(list(
+  avg_annual_data = avg_data,
+  summary_table = summary_table,
+  kable_table = kable_table
+)))
+}
+
+```
+
+# US-Mexico Border Crossings:
+
+```{r}
+#| label: run-mexico-summary
+#| echo: false
+#| results: asis
+#| warning: false
+analyze_border_crossings(data, "US-Mexico Border", "US–Mexico Border")
+
+```
+
+
+<div style="text-align: justify;">
+
+The data show that after a spike in US-Mexico border crossings from 1996 to 2000, crossings decreased up to 2011, whereupon they started to steadily rise again. The drastic increase in crossings may be attributed to the strong US economy at that time and post-NAFTA economic integration, while the drop-off after 2001 is likely attributable to increased border security post-September 11th. Additionally, economic contraction may have depressed travel into the US. Conversely the increase starting around 2010, may be attributed to post-2008 economic recovery and some stabilization of border policies. The drastic drop-off in border crossings is apparent during the COVID-19 pandemic, with an equally dramatic rebound starting around 2021, however, border crossings have no quite returned to pre-covid values and are on average 115.11 M lower between 2020-2023 compared to 1996-2000.
+
+</div>
+
+# US-Canada Border Crossings:
+
+```{r}
+#| label: run-canada-summary
+#| echo: false
+#| results: asis
+#| warning: false
+analyze_border_crossings(data, "US-Canada Border", "US–Canada Border")
+```
+<div style="text-align: justify;">
+
+In comparison, US_Canada border crossings have been steadily declining on average since 1996. Aside from the season variations in border crossings where large spikes in personal travel occur over the winter period, this steady decline may be driven by several causes. Similarly to Mexico border crossings, there is a steeper decrease post 2001, likely due to increased security measures post 9-11. A strengthening US dollar over that time period may also have made cross-border retail trips less popular, which historically were a major driver of border traffic. The same steep and sudden decline can be seen during the COVID-19 pandemic with border crossings still not fully recovering and much lower than they were in 1996. 
+
+</div>
+
+```{r}
+#| label: Store results for Canada border
+#| echo: false
+#| results: "hide"
+#| message: false
+#| warning: false
+#| include: false
+
+mexico_results <- analyze_border_crossings(data, "US-Mexico Border", "US–Mexico Border")
+
+```
+
+```{r}
+#| label: Store results for Mexico border
+#| echo: false
+#| results: "hide"
+#| message: false
+#| warning: false
+#| include: false
+canada_results <- analyze_border_crossings(data, "US-Canada Border", "US–Canada Border")
+```
+
+```{r}
+#| label: combine-monthly-averages
+#| echo: false
+#| results: "hide"
+#| message: false
+#| warning: false
+#| include: false
+
+# Extract and label average annual data
+canada_avg <- analyze_border_crossings(data, "US-Canada Border", "US–Canada Border")$avg_annual_data %>%
+  dplyr::mutate(Border = "Canada")
+
+mexico_avg <- analyze_border_crossings(data, "US-Mexico Border", "US–Mexico Border")$avg_annual_data %>%
+  dplyr::mutate(Border = "Mexico")
+
+# Combine into one dataframe
+combined_avg <- dplyr::bind_rows(canada_avg, mexico_avg)
+```
+
+```{r}
+#| label: Plot monthly crossing averages for Canada and Mexico border
+#| echo: false
+# Plot
+ggplot(combined_avg, aes(x = Year, y = Avg_Value, color = Border)) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  labs(
+    title = "Average Monthly Border Crossings per Year: Canada vs. Mexico",
+    x = "Year",
+    y = "Average Monthly Crossings (Millions)"
+  ) +
+  scale_x_date(breaks = seq(as.Date("1996-01-01"), as.Date("2025-01-01"), by = "4 years"),
+               date_labels = "%Y") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+<div style="text-align: justify;">
+
+The above plot demonstrates that border crossings through port of entries are slightly more volatile in Mexico than they are in Canada. These is likely a result of both changing US economic conditions (how attractive is it to foreign workers) and US foreign policy decisions which at times have made it easier of more difficult to access to obtain entry. It will be interesting to see how current economic policies like tariffs and political rhetoric affect these border cross numbers moving forward into 2025 as these trends can have a large effect of on the economies of border towns, international trade, and the tourism industry to name but a few sectors. 
+
+</div>
